@@ -1,5 +1,7 @@
-# Dependencies
-node_modules/
+node_modules
+dist
+.DS_Store
 
-# Build output
-dist/
+# secrets
+src/assets/key.json
+

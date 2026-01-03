@@ -1,2 +1,1 @@
-export {getBroadcastTargets} from './broadcast.js';
-
+export { getBroadcastTargets } from "./broadcast.js";

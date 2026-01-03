@@ -1,6 +1,6 @@
 {
   "name": "@three333/termbuddy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "type": "module",
   "bin": {
@@ -16,7 +16,8 @@
     "@langchain/openai": "^1.2.0",
     "ink": "^6.6.0",
     "langchain": "^1.2.3",
-    "react": "^19.2.3"
+    "react": "^19.2.3",
+    "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
     "@types/node": "^25.0.3",

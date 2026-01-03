@@ -1,77 +1,175 @@
-import React, {useMemo, useState} from 'react';
-import {Box, Text, useInput} from 'ink';
-import {useAiAgent} from '../hooks/index.js';
+import React, { useEffect, useMemo, useState } from "react";
+import { Box, Text, useInput } from "ink";
+import { useAiAgent } from "../hooks/index.js";
+import { loadStoredApiKey, saveStoredApiKey } from "../storage/apiKey.js";
+import type {
+  ProjectileDirection,
+  ProjectileKind,
+} from "./sprite/ProjectileThrowSprite.js";
 
 export function AiConsole(props: {
-	onClose: () => void;
-	onStartCountdown: (minutes: number) => void;
-	localName: string;
-	peerName: string;
+  onClose: () => void;
+  onStartCountdown: (minutes: number) => void;
+  onThrowProjectile: (
+    kind: ProjectileKind,
+    direction: ProjectileDirection
+  ) => void;
+  localName: string;
+  peerName: string;
 }) {
-	const [input, setInput] = useState('');
-	const agent = useAiAgent({
-		localName: props.localName,
-		peerName: props.peerName,
-		onStartCountdown: props.onStartCountdown
-	});
+  const [input, setInput] = useState("");
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [keyStatus, setKeyStatus] = useState<
+    "loading" | "missing" | "ready" | "saving"
+  >("loading");
 
-	const helpLine = useMemo(
-		() => '示例：倒计时20分钟 / countdown 20 / 问个技术问题',
-		[]
-	);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadStoredApiKey();
+      if (cancelled) return;
+      if (stored) {
+        setApiKey(stored);
+        setKeyStatus("ready");
+      } else {
+        setKeyStatus("missing");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-	useInput(
-		(ch, key) => {
-			if (key.escape) {
-				props.onClose();
-				return;
-			}
+  const agent = useAiAgent({
+    localName: props.localName,
+    peerName: props.peerName,
+    onStartCountdown: props.onStartCountdown,
+    onThrowProjectile: props.onThrowProjectile,
+    apiKey: apiKey ?? undefined,
+  });
 
-			if (key.return) {
-				const line = input.trim();
-				setInput('');
-				if (!line) return;
-				void agent.ask(line);
-				return;
-			}
+  const helpLine = useMemo(
+    () => "示例：倒计时20分钟 / 聊会天 / 和别人互动一下",
+    []
+  );
 
-			if (key.backspace || key.delete) {
-				setInput((s) => s.slice(0, -1));
-				return;
-			}
+  useInput(
+    (ch, key) => {
+      if (key.escape) {
+        props.onClose();
+        return;
+      }
 
-			if (key.ctrl || key.meta) return;
-			if (ch) setInput((s) => s + ch);
-		},
-		{isActive: true}
-	);
+      if (keyStatus !== "ready") {
+        if (key.return) {
+          const draft = keyDraft.trim();
+          if (!draft) return;
+          setKeyStatus("saving");
+          void (async () => {
+            await saveStoredApiKey(draft);
+            setApiKey(draft);
+            setKeyDraft("");
+            setKeyStatus("ready");
+          })();
+          return;
+        }
 
-	const lines = agent.lines.slice(-12);
+        if (key.backspace || key.delete) {
+          setKeyDraft((s) => s.slice(0, -1));
+          return;
+        }
 
-	return (
-		<Box flexDirection="column" borderStyle="round" paddingX={1} paddingY={0}>
-			<Box justifyContent="space-between">
-				<Text color="cyan">AI Console</Text>
-				<Text color="gray">{agent.busy ? 'Thinking…' : 'Esc 关闭'}</Text>
-			</Box>
+        if (key.ctrl || key.meta) return;
+        if (ch) setKeyDraft((s) => s + ch);
+        return;
+      }
 
-			<Box flexDirection="column" marginTop={1}>
-				<Text color="gray">{helpLine}</Text>
-			</Box>
+      if (key.return) {
+        const line = input.trim();
+        setInput("");
+        if (!line) return;
+        void agent.ask(line);
+        return;
+      }
 
-			<Box flexDirection="column" marginTop={1}>
-				{lines.length === 0 ? <Text color="gray">（幽灵还在壳里…）</Text> : null}
-				{lines.map((l, i) => (
-					<Text key={`${l.kind}:${l.at}:${i}`} color={l.kind === 'user' ? 'yellow' : 'white'}>
-						{l.text}
-					</Text>
-				))}
-			</Box>
+      if (key.backspace || key.delete) {
+        setInput((s) => s.slice(0, -1));
+        return;
+      }
 
-			<Box marginTop={1}>
-				<Text color="green">{'>'} </Text>
-				<Text>{input}</Text>
-			</Box>
-		</Box>
-	);
+      if (key.ctrl || key.meta) return;
+      if (ch) setInput((s) => s + ch);
+    },
+    { isActive: true }
+  );
+
+  const lines = agent.lines.filter((l) => l.text.trim().length > 0).slice(-6);
+
+  return (
+    <Box flexDirection="column" borderStyle="round" paddingX={1} paddingY={0}>
+      <Box justifyContent="space-between" marginBottom={0}>
+        <Text color="cyan">AI Console</Text>
+        <Text color="gray">
+          {keyStatus === "saving"
+            ? "Saving…"
+            : agent.busy
+            ? "Thinking…"
+            : "Esc Close"}
+        </Text>
+      </Box>
+
+      <Box flexDirection="column">
+        {keyStatus === "loading" ? (
+          <Text color="gray">Checking API Key...</Text>
+        ) : keyStatus === "missing" || keyStatus === "saving" ? (
+          <Text color="yellow">
+            Setup: Enter DeepSeek API Key (saves to{" "}
+            <Text color="cyan">src/assets/key.json</Text>)
+          </Text>
+        ) : lines.length === 0 ? (
+          <Text color="gray">{helpLine}</Text>
+        ) : null}
+      </Box>
+
+      <Box flexDirection="column" marginTop={0} minHeight={6}>
+        {keyStatus === "ready" ? (
+          <>
+            {lines.map((l, i) => (
+              <Text
+                key={`${l.kind}:${l.at}:${i}`}
+                color={l.kind === "user" ? "yellow" : "white"}
+                wrap="truncate-end"
+              >
+                {l.kind === "user" ? "> " : ""}
+                {l.text}
+              </Text>
+            ))}
+          </>
+        ) : (
+          <Text color="gray">Please enter API Key to proceed.</Text>
+        )}
+      </Box>
+
+      <Box
+        marginTop={0}
+        borderStyle="single"
+        borderTop={true}
+        borderBottom={false}
+        borderLeft={false}
+        borderRight={false}
+      >
+        <Text color="green">{">"} </Text>
+        {keyStatus === "ready" ? (
+          <Text>{input}</Text>
+        ) : (
+          <Text>
+            {keyDraft.length === 0
+              ? ""
+              : "*".repeat(Math.min(64, keyDraft.length))}
+          </Text>
+        )}
+      </Box>
+    </Box>
+  );
 }

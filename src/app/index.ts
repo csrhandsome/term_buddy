@@ -1,2 +1,1 @@
-export {App} from './App.js';
-
+export { App } from "./App.js";

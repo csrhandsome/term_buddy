@@ -37,7 +37,10 @@ export function RoomScanner(props: {
 				) : (
 					sortedRooms.map((room, i) => (
 						<Text key={`${room.ip}:${room.tcpPort}`}>
-							<Text color="cyan">[{i + 1}]</Text> {room.roomName} — {room.hostName} @ {room.ip}:{room.tcpPort}
+							<Text color="cyan">[{i + 1}]</Text> {room.hostName} <Text color="gray">@</Text>{' '}
+							<Text color="gray">
+								{room.ip}:{room.tcpPort}
+							</Text>
 						</Text>
 					))
 				)}

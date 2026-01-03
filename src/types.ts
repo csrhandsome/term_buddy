@@ -6,3 +6,11 @@ export type DiscoveredRoom = {
 	lastSeenAt: number;
 };
 
+export type LeaveStats = {
+	keyPresses: number;
+	sessionDurationMs: number;
+	connectedDurationMs: number;
+	startedAt: number;
+	endedAt: number;
+	peerName?: string;
+};
