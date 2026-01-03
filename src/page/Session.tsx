@@ -7,7 +7,9 @@ import {
   CountdownClockSprite,
   ProjectileThrowSprite,
   StatusHeader,
+  InfoPanel,
 } from "../components/index.js";
+import type { InfoRecord } from "../components/index.js";
 import type { CountdownClockType } from "../components/sprite/CountdownClockSprite.js";
 import type {
   ProjectileDirection,
@@ -60,12 +62,23 @@ export function Session(
       direction: ProjectileDirection;
     }>
   >([]);
-  const [localBubble, setLocalBubble] = useState<string | null>(null);
-  const [buddyBubble, setBuddyBubble] = useState<string | null>(null);
-  const bubbleTimersRef = useRef<{
-    local: NodeJS.Timeout | null;
-    buddy: NodeJS.Timeout | null;
-  }>({ local: null, buddy: null });
+  // Bubbles for all 4 users: index 0 = local (No.1), 1-3 = peers (No.2-4)
+  const [peerBubbles, setPeerBubbles] = useState<(string | null)[]>([null, null, null, null]);
+  const bubbleTimersRef = useRef<(NodeJS.Timeout | null)[]>([null, null, null, null]);
+
+  // Info records for logging events
+  const [infoRecords, setInfoRecords] = useState<InfoRecord[]>([]);
+  const nextRecordIdRef = useRef<number>(1);
+
+  const addInfoRecord = useCallback((type: InfoRecord["type"], content: string) => {
+    const record: InfoRecord = {
+      id: nextRecordIdRef.current++,
+      timestamp: Date.now(),
+      type,
+      content,
+    };
+    setInfoRecords(prev => [...prev, record]);
+  }, []);
 
   const tcpOptions = useMemo(() => {
     return props.role === "host"
@@ -105,6 +118,30 @@ export function Session(
   // Use peers array from TCP sync for multi-peer support
   const peers = tcp.peers;
   const firstPeerName = peers.length > 0 ? peers[0].name : undefined;
+  const prevPeersRef = useRef<typeof peers>([]);
+
+  // Track peer joins and leaves
+  useEffect(() => {
+    const prevPeers = prevPeersRef.current;
+    const prevNames = new Set(prevPeers.map(p => p.name));
+    const currentNames = new Set(peers.map(p => p.name));
+
+    // Check for new peers
+    peers.forEach(p => {
+      if (!prevNames.has(p.name)) {
+        addInfoRecord("join", `${p.name} joined`);
+      }
+    });
+
+    // Check for left peers
+    prevPeers.forEach(p => {
+      if (!currentNames.has(p.name)) {
+        addInfoRecord("leave", `${p.name} left`);
+      }
+    });
+
+    prevPeersRef.current = [...peers];
+  }, [peers, addInfoRecord]);
 
   const onToggleAi = useCallback(() => setShowAi((v) => !v), []);
   const onCloseAi = useCallback(() => setShowAi(false), []);
@@ -195,7 +232,8 @@ export function Session(
       remainingSeconds: totalSeconds,
       type,
     });
-  }, []);
+    addInfoRecord("countdown", `Started ${minutes}min countdown`);
+  }, [addInfoRecord]);
 
   const nextShotIdRef = useRef<number>(1);
   const shotQueueRef = useRef<
@@ -221,35 +259,43 @@ export function Session(
       shotQueueRef.current.push({ kind, direction });
       pumpShotQueue();
       if (tcp.status === "connected") tcp.sendProjectile(kind, direction);
+      addInfoRecord("projectile", `Threw ${kind}`);
     },
-    [pumpShotQueue, tcp]
+    [pumpShotQueue, tcp, addInfoRecord]
   );
 
   const showBubble = useCallback(
-    (args: { text: string; target: "local" | "buddy"; durationMs: number }) => {
+    (args: { text: string; target: number; durationMs: number }) => {
       const text = args.text.trim();
       if (!text) return;
       const durationMs = Math.max(300, Math.min(15_000, Math.floor(args.durationMs)));
 
-      const setBubble = args.target === "buddy" ? setBuddyBubble : setLocalBubble;
-      setBubble(text);
+      // target is 1-4 (No.1 to No.4), convert to 0-3 index
+      const targetIndex = Math.max(0, Math.min(3, args.target - 1));
 
-      const prevTimer =
-        args.target === "buddy"
-          ? bubbleTimersRef.current.buddy
-          : bubbleTimersRef.current.local;
+      setPeerBubbles(prev => {
+        const next = [...prev];
+        next[targetIndex] = text;
+        return next;
+      });
+
+      const prevTimer = bubbleTimersRef.current[targetIndex];
       if (prevTimer) clearTimeout(prevTimer);
 
       const handle = setTimeout(() => {
-        setBubble(null);
-        if (args.target === "buddy") bubbleTimersRef.current.buddy = null;
-        else bubbleTimersRef.current.local = null;
+        setPeerBubbles(prev => {
+          const next = [...prev];
+          next[targetIndex] = null;
+          return next;
+        });
+        bubbleTimersRef.current[targetIndex] = null;
       }, durationMs);
 
-      if (args.target === "buddy") bubbleTimersRef.current.buddy = handle;
-      else bubbleTimersRef.current.local = handle;
+      bubbleTimersRef.current[targetIndex] = handle;
+
+      addInfoRecord("bubble", `No.${args.target}: "${text}"`);
     },
-    []
+    [addInfoRecord]
   );
 
   useInput(
@@ -309,8 +355,9 @@ export function Session(
 
   useEffect(() => {
     return () => {
-      if (bubbleTimersRef.current.local) clearTimeout(bubbleTimersRef.current.local);
-      if (bubbleTimersRef.current.buddy) clearTimeout(bubbleTimersRef.current.buddy);
+      bubbleTimersRef.current.forEach(timer => {
+        if (timer) clearTimeout(timer);
+      });
     };
   }, []);
 
@@ -324,18 +371,29 @@ export function Session(
         peerCount={peers.length}
       />
 
-      {/* Main Stage: 3 Columns */}
-      <Box
-        flexDirection="row"
-        alignItems="center"
-        justifyContent="space-between"
-        marginTop={1}
-        gap={2}
-      >
-        {/* Left: Local User */}
-        <Box flexDirection="column" alignItems="center" minWidth={20}>
-          {countdown ? (
-            <Box flexDirection="column" alignItems="center" marginBottom={0}>
+      {/* Main Stage: 2x2 Grid Layout for 4 Users */}
+      <Box flexDirection="column" marginTop={1}>
+        {/* Projectile Area at Top */}
+        <Box flexDirection="column" width="100%" alignItems="center" marginBottom={1}>
+          {shots.map((s) => (
+            <ProjectileThrowSprite
+              key={String(s.id)}
+              kind={s.kind}
+              direction={s.direction}
+              shotId={s.id}
+              width={50}
+              onDone={() =>
+                setShots((prev) => prev.filter((x) => x.id !== s.id))
+              }
+            />
+          ))}
+          {shots.length === 0 ? <Box height={1} /> : null}
+        </Box>
+
+        {/* Countdown Timer (shared) */}
+        {countdown ? (
+          <Box justifyContent="center" marginBottom={1}>
+            <Box flexDirection="column" alignItems="center">
               <Text color="gray">{formatMMSS(countdown.remainingSeconds)}</Text>
               <CountdownClockSprite
                 variant="COMPACT"
@@ -346,60 +404,67 @@ export function Session(
                 showLabel={false}
               />
             </Box>
-          ) : (
-            <Box height={4} />
-          )}
-          <BuddyAvatar state={localState} marginTop={0} bubbleText={localBubble} />
-          <Text color="cyan">{localLabel}</Text>
-        </Box>
-
-        {/* Center: Stage (Projectiles only) */}
-        <Box
-          flexDirection="column"
-          alignItems="center"
-          flexGrow={1}
-          minWidth={40}
-        >
-          {/* Projectile Area */}
-          <Box flexDirection="column" width="100%" alignItems="center">
-            {shots.map((s) => (
-              <ProjectileThrowSprite
-                key={String(s.id)}
-                kind={s.kind}
-                direction={s.direction}
-                shotId={s.id}
-                width={36}
-                onDone={() =>
-                  setShots((prev) => prev.filter((x) => x.id !== s.id))
-                }
-              />
-            ))}
-            {/* Spacer to maintain layout stability when shots appear/disappear */}
-            {shots.length === 0 ? <Box height={1} /> : null}
           </Box>
-        </Box>
+        ) : null}
 
-        {/* Right: Remote Users */}
-        <Box flexDirection="column" alignItems="center" minWidth={20}>
-          {peers.length === 0 ? (
-            <>
-              <Box height={4} />
-              <BuddyAvatar state="OFFLINE" marginTop={0} bubbleText={buddyBubble} />
-              <Text color="gray">Waiting...</Text>
-            </>
-          ) : (
-            <Box flexDirection="row" gap={2} flexWrap="wrap" justifyContent="center">
-              {peers.slice(0, 4).map((peer) => (
-                <Box key={peer.id} flexDirection="column" alignItems="center">
-                  <BuddyAvatar state={peer.state} marginTop={0} bubbleText={buddyBubble} />
-                  <Text color="magenta">{peer.name}</Text>
-                </Box>
-              ))}
-              {peers.length > 4 && (
-                <Text color="gray">+{peers.length - 4} more</Text>
+        {/* 2x2 Grid of Users */}
+        <Box flexDirection="column" alignItems="center">
+          {/* Row 1: User 1 (Local) and User 2 */}
+          <Box flexDirection="row" justifyContent="center" gap={4}>
+            {/* No.1 - Local User */}
+            <Box flexDirection="column" alignItems="center" minWidth={18}>
+              <Text color="cyan" bold>No.1 {props.localName}</Text>
+              <BuddyAvatar state={localState} marginTop={0} bubbleText={peerBubbles[0] ?? null} />
+            </Box>
+
+            {/* No.2 - First Peer */}
+            <Box flexDirection="column" alignItems="center" minWidth={18}>
+              {peers.length >= 1 ? (
+                <>
+                  <Text color="magenta" bold>No.2 {peers[0].name}</Text>
+                  <BuddyAvatar state={peers[0].state} marginTop={0} bubbleText={peerBubbles[1] ?? null} />
+                </>
+              ) : (
+                <>
+                  <Text color="gray">No.2 (Empty)</Text>
+                  <BuddyAvatar state="OFFLINE" marginTop={0} />
+                </>
               )}
             </Box>
-          )}
+          </Box>
+
+          {/* Row 2: User 3 and User 4 */}
+          <Box flexDirection="row" justifyContent="center" gap={4} marginTop={1}>
+            {/* No.3 - Second Peer */}
+            <Box flexDirection="column" alignItems="center" minWidth={18}>
+              {peers.length >= 2 ? (
+                <>
+                  <Text color="magenta" bold>No.3 {peers[1].name}</Text>
+                  <BuddyAvatar state={peers[1].state} marginTop={0} bubbleText={peerBubbles[2] ?? null} />
+                </>
+              ) : (
+                <>
+                  <Text color="gray">No.3 (Empty)</Text>
+                  <BuddyAvatar state="OFFLINE" marginTop={0} />
+                </>
+              )}
+            </Box>
+
+            {/* No.4 - Third Peer */}
+            <Box flexDirection="column" alignItems="center" minWidth={18}>
+              {peers.length >= 3 ? (
+                <>
+                  <Text color="magenta" bold>No.4 {peers[2].name}</Text>
+                  <BuddyAvatar state={peers[2].state} marginTop={0} bubbleText={peerBubbles[3] ?? null} />
+                </>
+              ) : (
+                <>
+                  <Text color="gray">No.4 (Empty)</Text>
+                  <BuddyAvatar state="OFFLINE" marginTop={0} />
+                </>
+              )}
+            </Box>
+          </Box>
         </Box>
       </Box>
 
@@ -421,15 +486,16 @@ export function Session(
         </Box>
       ) : null}
 
-      {/* AI Console Overlay */}
+      {/* AI Console and Info Panel (side by side) */}
       {showAi ? (
         <Box
           marginTop={1}
           width="100%"
           flexDirection="row"
           justifyContent="center"
+          gap={2}
         >
-          <Box width={64}>
+          <Box width={48}>
             <AiConsole
               onClose={onCloseAi}
               onStartCountdown={startCountdown}
@@ -441,7 +507,11 @@ export function Session(
                 (props.role === "client" ? props.hostName : undefined) ??
                 "Buddy"
               }
+              peers={peers}
             />
+          </Box>
+          <Box width={32}>
+            <InfoPanel records={infoRecords} maxRecords={6} />
           </Box>
         </Box>
       ) : null}

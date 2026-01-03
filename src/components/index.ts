@@ -6,3 +6,5 @@ export {
 } from "./sprite/CountdownClockSprite.js";
 export { ProjectileThrowSprite } from "./sprite/ProjectileThrowSprite.js";
 export { StatusHeader } from "./StatusHeader.js";
+export { InfoPanel } from "./InfoPanel.js";
+export type { InfoRecord } from "./InfoPanel.js";

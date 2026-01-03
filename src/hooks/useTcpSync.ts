@@ -99,8 +99,17 @@ export function useTcpSync(options: Options): {
     }
   }, [broadcastPacket, syncPeersState]);
 
+  const MAX_PEERS = 4;
+
   // Attach a new peer socket (host only)
   const attachPeerSocket = useCallback((socket: net.Socket) => {
+    // Reject if already at max capacity (host + 3 clients = 4 total, so max 3 peer connections)
+    if (peerConnectionsRef.current.size >= MAX_PEERS - 1) {
+      socket.end();
+      socket.destroy();
+      return;
+    }
+
     const peerId = generatePeerId();
     let buf = "";
 

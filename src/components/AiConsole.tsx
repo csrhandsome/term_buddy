@@ -12,7 +12,7 @@ export function AiConsole(props: {
   onStartCountdown: (minutes: number) => void;
   onShowBubble?: (args: {
     text: string;
-    target: "local" | "buddy";
+    target: number; // 1-4 for No.1 to No.4
     durationMs: number;
   }) => void;
   onThrowProjectile: (
@@ -21,6 +21,7 @@ export function AiConsole(props: {
   ) => void;
   localName: string;
   peerName: string;
+  peers?: Array<{ id: string; name: string }>; // For session info
 }) {
   const [input, setInput] = useState("");
   const [apiKey, setApiKey] = useState<string | null>(null);
@@ -55,6 +56,7 @@ export function AiConsole(props: {
   const agent = useAiAgent({
     localName: props.localName,
     peerName: props.peerName,
+    peers: props.peers,
     onStartCountdown: props.onStartCountdown,
     onShowBubble: props.onShowBubble,
     onThrowProjectile: props.onThrowProjectile,

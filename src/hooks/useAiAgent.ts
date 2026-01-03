@@ -49,26 +49,36 @@ function lastAiText(messages: unknown[]): string | null {
   return null;
 }
 
-function createSystemPrompt(context: { localName: string; peerName: string }) {
+function createSystemPrompt(context: { localName: string; peerName: string; peers?: Array<{ id: string; name: string }> }) {
+  const peerList = context.peers ?? [];
+  const userList = [
+    `No.1: ${context.localName} (我/本地用户)`,
+    peerList[0] ? `No.2: ${peerList[0].name}` : "No.2: (空位)",
+    peerList[1] ? `No.3: ${peerList[1].name}` : "No.3: (空位)",
+    peerList[2] ? `No.4: ${peerList[2].name}` : "No.4: (空位)",
+  ].join("、");
+
   return [
-    "你是 TermBuddy 里的“壳中幽灵 (Ghost in the Shell)”。",
-    "默认隐形；被 / 唤醒时出现。风格：极简、干练、少废话。",
-    "你可以使用工具来操控应用功能（例如倒计时）。",
-    "如果用户提到“倒计时/专注/计时/countdown”，优先调用 start_countdown。",
-    "如果用户提到“气泡/泡泡/提示/说一句”，优先调用 show_bubble。",
-    "如果用户提到“互动/扔/投掷/throw”，优先调用 throw_projectile。",
-    "当用户明确要求投掷 N 次且 1<=N<=100 时，必须按 N 执行：重复调用 throw_projectile 共 N 次，不要改成“示意/少量几次”。超过 100 则分批多次调用。",
-    `当前上下文：我叫 ${context.localName}；同桌叫 ${context.peerName}。`,
+    `你是 TermBuddy 里的「壳中幽灵 (Ghost in the Shell)」。`,
+    `默认隐形；被 / 唤醒时出现。风格：极简、干练、少废话。`,
+    `你可以使用工具来操控应用功能（例如倒计时）。`,
+    `如果用户提到「倒计时/专注/计时/countdown」，优先调用 start_countdown。`,
+    `如果用户提到「气泡/泡泡/提示/说一句/和某人说」，优先调用 show_bubble，并根据目标用户设置 target 参数（1-4）。`,
+    `如果用户提到「互动/扔/投掷/throw」，优先调用 throw_projectile。`,
+    `当用户明确要求投掷 N 次且 1<=N<=100 时，必须按 N 执行：重复调用 throw_projectile 共 N 次，不要改成「示意/少量几次」。超过 100 则分批多次调用。`,
+    `当前房间有4个位置，用户列表：${userList}。`,
+    `我是 ${context.localName}（No.1）。`,
   ].join("\n");
 }
 
 export function useAiAgent(options: {
   localName: string;
   peerName: string;
+  peers?: Array<{ id: string; name: string }>;
   onStartCountdown?: (minutes: number) => void;
   onShowBubble?: (args: {
     text: string;
-    target: "local" | "buddy";
+    target: number; // 1-4 for No.1 to No.4
     durationMs: number;
   }) => void;
   onThrowProjectile?: (kind: ProjectileKind, direction: ProjectileDirection) => void;
@@ -146,6 +156,7 @@ export function useAiAgent(options: {
         systemPrompt: createSystemPrompt({
           localName: options.localName,
           peerName: options.peerName,
+          peers: options.peers,
         }),
         name: "ghost",
       });
@@ -160,6 +171,7 @@ export function useAiAgent(options: {
     options.onShowBubble,
     options.onThrowProjectile,
     options.peerName,
+    options.peers,
   ]);
 
   const ask = useCallback(
