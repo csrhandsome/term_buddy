@@ -20,12 +20,16 @@ export function StatusHeader(props: {
   status: ConnectionStatus;
   hostIp?: string;
   tcpPort?: number;
+  peerCount?: number;
 }) {
   const st = statusText(props.status);
   return (
     <Box>
       <Box>
         <Text color={st.color}>{st.label}</Text>
+        {props.peerCount !== undefined && props.peerCount > 0 && (
+          <Text color="cyan"> ({props.peerCount} online)</Text>
+        )}
         {props.role === "host" ? (
           <Text color="gray">
             {props.tcpPort ? ` — TCP :${props.tcpPort}` : ""}

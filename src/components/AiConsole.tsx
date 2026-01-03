@@ -10,6 +10,11 @@ import type {
 export function AiConsole(props: {
   onClose: () => void;
   onStartCountdown: (minutes: number) => void;
+  onShowBubble?: (args: {
+    text: string;
+    target: "local" | "buddy";
+    durationMs: number;
+  }) => void;
   onThrowProjectile: (
     kind: ProjectileKind,
     direction: ProjectileDirection
@@ -20,6 +25,7 @@ export function AiConsole(props: {
   const [input, setInput] = useState("");
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
+  const [cursorOn, setCursorOn] = useState(true);
   const [keyStatus, setKeyStatus] = useState<
     "loading" | "missing" | "ready" | "saving"
   >("loading");
@@ -41,13 +47,26 @@ export function AiConsole(props: {
     };
   }, []);
 
+  useEffect(() => {
+    const handle = setInterval(() => setCursorOn((v) => !v), 500);
+    return () => clearInterval(handle);
+  }, []);
+
   const agent = useAiAgent({
     localName: props.localName,
     peerName: props.peerName,
     onStartCountdown: props.onStartCountdown,
+    onShowBubble: props.onShowBubble,
     onThrowProjectile: props.onThrowProjectile,
     apiKey: apiKey ?? undefined,
   });
+
+  const resetApiKey = () => {
+    setApiKey(null);
+    setKeyDraft("");
+    setKeyStatus("missing");
+    agent.resetApiKeyError();
+  };
 
   const helpLine = useMemo(
     () => "示例：倒计时20分钟 / 聊会天 / 和别人互动一下",
@@ -58,6 +77,11 @@ export function AiConsole(props: {
     (ch, key) => {
       if (key.escape) {
         props.onClose();
+        return;
+      }
+
+      if (agent.apiKeyError && (ch === "r" || ch === "R")) {
+        resetApiKey();
         return;
       }
 
@@ -113,6 +137,8 @@ export function AiConsole(props: {
         <Text color="gray">
           {keyStatus === "saving"
             ? "Saving…"
+            : agent.apiKeyError
+            ? "Press R to reset API"
             : agent.busy
             ? "Thinking…"
             : "Esc Close"}
@@ -161,12 +187,16 @@ export function AiConsole(props: {
       >
         <Text color="green">{">"} </Text>
         {keyStatus === "ready" ? (
-          <Text>{input}</Text>
+          <>
+            <Text>{input}</Text>
+            {cursorOn ? <Text inverse> </Text> : <Text> </Text>}
+          </>
         ) : (
           <Text>
             {keyDraft.length === 0
               ? ""
               : "*".repeat(Math.min(64, keyDraft.length))}
+            {cursorOn ? <Text inverse> </Text> : <Text> </Text>}
           </Text>
         )}
       </Box>

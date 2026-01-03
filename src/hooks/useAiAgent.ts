@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createAgent } from "langchain";
 import { ChatOpenAI } from "@langchain/openai";
 import {
+  createBubbleTool,
   createCountdownTool,
   createInteractionTool,
   createSessionInfoTool,
@@ -54,7 +55,9 @@ function createSystemPrompt(context: { localName: string; peerName: string }) {
     "默认隐形；被 / 唤醒时出现。风格：极简、干练、少废话。",
     "你可以使用工具来操控应用功能（例如倒计时）。",
     "如果用户提到“倒计时/专注/计时/countdown”，优先调用 start_countdown。",
+    "如果用户提到“气泡/泡泡/提示/说一句”，优先调用 show_bubble。",
     "如果用户提到“互动/扔/投掷/throw”，优先调用 throw_projectile。",
+    "当用户明确要求投掷 N 次且 1<=N<=100 时，必须按 N 执行：重复调用 throw_projectile 共 N 次，不要改成“示意/少量几次”。超过 100 则分批多次调用。",
     `当前上下文：我叫 ${context.localName}；同桌叫 ${context.peerName}。`,
   ].join("\n");
 }
@@ -63,11 +66,17 @@ export function useAiAgent(options: {
   localName: string;
   peerName: string;
   onStartCountdown?: (minutes: number) => void;
+  onShowBubble?: (args: {
+    text: string;
+    target: "local" | "buddy";
+    durationMs: number;
+  }) => void;
   onThrowProjectile?: (kind: ProjectileKind, direction: ProjectileDirection) => void;
   apiKey?: string;
 }) {
   const [lines, setLines] = useState<AiLine[]>([]);
   const [busy, setBusy] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState(false);
 
   const agentRef = useRef<Awaited<ReturnType<typeof createAgent>> | null>(null);
   const agentInitRef = useRef<Promise<
@@ -108,6 +117,10 @@ export function useAiAgent(options: {
         onStartCountdown: options.onStartCountdown,
       });
 
+      const showBubble = createBubbleTool({
+        onShowBubble: options.onShowBubble,
+      });
+
       const sessionInfo = createSessionInfoTool({
         localName: options.localName,
         peerName: options.peerName,
@@ -129,7 +142,7 @@ export function useAiAgent(options: {
       });
       return createAgent({
         model: llm,
-        tools: [startCountdown, interaction, sessionInfo],
+        tools: [startCountdown, showBubble, interaction, sessionInfo],
         systemPrompt: createSystemPrompt({
           localName: options.localName,
           peerName: options.peerName,
@@ -144,6 +157,7 @@ export function useAiAgent(options: {
     options.apiKey,
     options.localName,
     options.onStartCountdown,
+    options.onShowBubble,
     options.onThrowProjectile,
     options.peerName,
   ]);
@@ -194,9 +208,19 @@ export function useAiAgent(options: {
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (msg === "missing_api_key")
-          updateLine(aiAt, "请先在 AI Console 输入 DeepSeek API Key。");
-        else updateLine(aiAt, `（AI 出错）${msg}`);
+        const isApiKeyError =
+          msg === "missing_api_key" ||
+          msg.includes("401") ||
+          msg.includes("403") ||
+          msg.includes("Unauthorized") ||
+          msg.includes("Invalid API");
+
+        if (isApiKeyError) {
+          setApiKeyError(true);
+          updateLine(aiAt, "API Key 错误或失效，请重新输入（按 R 键）");
+        } else {
+          updateLine(aiAt, `（AI 出错）${msg}`);
+        }
       } finally {
         setBusy(false);
       }
@@ -204,9 +228,13 @@ export function useAiAgent(options: {
     [append, ensureAgent, updateLine]
   );
 
+  const resetApiKeyError = useCallback(() => {
+    setApiKeyError(false);
+  }, []);
+
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
 
-  return { lines, ask, busy };
+  return { lines, ask, busy, apiKeyError, resetApiKeyError };
 }

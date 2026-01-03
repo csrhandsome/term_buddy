@@ -28,9 +28,13 @@ export async function loadStoredApiKey(): Promise<string | null> {
 }
 
 export async function saveStoredApiKey(apiKey: string): Promise<void> {
+	const trimmed = apiKey.trim();
+	if (trimmed.length === 0) {
+		throw new Error('API key cannot be empty');
+	}
 	const absolute = path.resolve(process.cwd(), KEY_RELATIVE_PATH);
 	await ensureDirForFile(absolute);
-	const payload: KeyFile = {apiKey};
+	const payload: KeyFile = {apiKey: trimmed};
 	await fs.writeFile(absolute, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 

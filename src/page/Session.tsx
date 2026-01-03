@@ -60,6 +60,12 @@ export function Session(
       direction: ProjectileDirection;
     }>
   >([]);
+  const [localBubble, setLocalBubble] = useState<string | null>(null);
+  const [buddyBubble, setBuddyBubble] = useState<string | null>(null);
+  const bubbleTimersRef = useRef<{
+    local: NodeJS.Timeout | null;
+    buddy: NodeJS.Timeout | null;
+  }>({ local: null, buddy: null });
 
   const tcpOptions = useMemo(() => {
     return props.role === "host"
@@ -96,7 +102,9 @@ export function Session(
 
   const localActivity = useActivityMonitor();
 
-  const remoteActivity: ActivityState = tcp.remoteState ?? "OFFLINE";
+  // Use peers array from TCP sync for multi-peer support
+  const peers = tcp.peers;
+  const firstPeerName = peers.length > 0 ? peers[0].name : undefined;
 
   const onToggleAi = useCallback(() => setShowAi((v) => !v), []);
   const onCloseAi = useCallback(() => setShowAi(false), []);
@@ -170,10 +178,10 @@ export function Session(
       connectedDurationMs,
       startedAt: sessionStartAtRef.current,
       endedAt,
-      peerName: tcp.peerName,
+      peerName: firstPeerName,
     };
     props.onLeave(stats);
-  }, [props, tcp.peerName]);
+  }, [props, firstPeerName]);
 
   const startCountdown = useCallback((minutes: number) => {
     const totalSeconds = Math.max(1, Math.floor(minutes * 60));
@@ -189,10 +197,57 @@ export function Session(
     });
   }, []);
 
+  const nextShotIdRef = useRef<number>(1);
+  const shotQueueRef = useRef<
+    Array<{ kind: ProjectileKind; direction: ProjectileDirection }>
+  >([]);
+
+  const pumpShotQueue = useCallback(() => {
+    setShots((prev) => {
+      if (prev.length >= 1) return prev;
+      const next = shotQueueRef.current.shift();
+      if (!next) return prev;
+      const id = nextShotIdRef.current++;
+      return [...prev, { id, kind: next.kind, direction: next.direction }];
+    });
+  }, []);
+
+  useEffect(() => {
+    if (shots.length === 0) pumpShotQueue();
+  }, [shots.length, pumpShotQueue]);
+
   const throwProjectile = useCallback(
     (kind: ProjectileKind, direction: ProjectileDirection) => {
-      const id = Date.now() + Math.floor(Math.random() * 1000);
-      setShots((prev) => [...prev, { id, kind, direction }]);
+      shotQueueRef.current.push({ kind, direction });
+      pumpShotQueue();
+      if (tcp.status === "connected") tcp.sendProjectile(kind, direction);
+    },
+    [pumpShotQueue, tcp]
+  );
+
+  const showBubble = useCallback(
+    (args: { text: string; target: "local" | "buddy"; durationMs: number }) => {
+      const text = args.text.trim();
+      if (!text) return;
+      const durationMs = Math.max(300, Math.min(15_000, Math.floor(args.durationMs)));
+
+      const setBubble = args.target === "buddy" ? setBuddyBubble : setLocalBubble;
+      setBubble(text);
+
+      const prevTimer =
+        args.target === "buddy"
+          ? bubbleTimersRef.current.buddy
+          : bubbleTimersRef.current.local;
+      if (prevTimer) clearTimeout(prevTimer);
+
+      const handle = setTimeout(() => {
+        setBubble(null);
+        if (args.target === "buddy") bubbleTimersRef.current.buddy = null;
+        else bubbleTimersRef.current.local = null;
+      }, durationMs);
+
+      if (args.target === "buddy") bubbleTimersRef.current.buddy = handle;
+      else bubbleTimersRef.current.local = handle;
     },
     []
   );
@@ -212,11 +267,6 @@ export function Session(
     { isActive: !showAi && countdown !== null }
   );
 
-  const buddyName =
-    props.role === "host"
-      ? tcp.peerName ?? "Waiting..."
-      : props.hostName ?? "Host";
-
   const localState = localActivity.state;
   const localLabel =
     props.role === "host"
@@ -228,6 +278,18 @@ export function Session(
     if (tcp.status !== "connected") return;
     tcp.sendStatus(localState);
   }, [localState, tcp.status, tcp.sendStatus]);
+
+  // Handle incoming projectiles from peer (flip direction)
+  useEffect(() => {
+    const handleRemoteProjectile = (kind: ProjectileKind, direction: ProjectileDirection, _senderName?: string) => {
+      const flippedDirection: ProjectileDirection =
+        direction === "LEFT_TO_RIGHT" ? "RIGHT_TO_LEFT" : "LEFT_TO_RIGHT";
+      shotQueueRef.current.push({ kind, direction: flippedDirection });
+      pumpShotQueue();
+    };
+
+    tcp.setOnRemoteProjectile(handleRemoteProjectile);
+  }, [tcp, pumpShotQueue]);
 
   useEffect(() => {
     if (!countdown) return;
@@ -245,6 +307,13 @@ export function Session(
     return () => clearInterval(handle);
   }, [countdown?.endsAt]);
 
+  useEffect(() => {
+    return () => {
+      if (bubbleTimersRef.current.local) clearTimeout(bubbleTimersRef.current.local);
+      if (bubbleTimersRef.current.buddy) clearTimeout(bubbleTimersRef.current.buddy);
+    };
+  }, []);
+
   return (
     <Box flexDirection="column" padding={1}>
       <StatusHeader
@@ -252,6 +321,7 @@ export function Session(
         status={tcp.status}
         hostIp={props.role === "client" ? props.hostIp : undefined}
         tcpPort={props.role === "client" ? props.tcpPort : tcp.listenPort}
+        peerCount={peers.length}
       />
 
       {/* Main Stage: 3 Columns */}
@@ -279,7 +349,7 @@ export function Session(
           ) : (
             <Box height={4} />
           )}
-          <BuddyAvatar state={localState} marginTop={0} />
+          <BuddyAvatar state={localState} marginTop={0} bubbleText={localBubble} />
           <Text color="cyan">{localLabel}</Text>
         </Box>
 
@@ -309,12 +379,27 @@ export function Session(
           </Box>
         </Box>
 
-        {/* Right: Remote User */}
+        {/* Right: Remote Users */}
         <Box flexDirection="column" alignItems="center" minWidth={20}>
-          {/* Placeholder for remote clock to keep alignment with local user */}
-          <Box height={4} />
-          <BuddyAvatar state={remoteActivity} marginTop={0} />
-          <Text color="magenta">{buddyName}</Text>
+          {peers.length === 0 ? (
+            <>
+              <Box height={4} />
+              <BuddyAvatar state="OFFLINE" marginTop={0} bubbleText={buddyBubble} />
+              <Text color="gray">Waiting...</Text>
+            </>
+          ) : (
+            <Box flexDirection="row" gap={2} flexWrap="wrap" justifyContent="center">
+              {peers.slice(0, 4).map((peer) => (
+                <Box key={peer.id} flexDirection="column" alignItems="center">
+                  <BuddyAvatar state={peer.state} marginTop={0} bubbleText={buddyBubble} />
+                  <Text color="magenta">{peer.name}</Text>
+                </Box>
+              ))}
+              {peers.length > 4 && (
+                <Text color="gray">+{peers.length - 4} more</Text>
+              )}
+            </Box>
+          )}
         </Box>
       </Box>
 
@@ -348,10 +433,11 @@ export function Session(
             <AiConsole
               onClose={onCloseAi}
               onStartCountdown={startCountdown}
+              onShowBubble={showBubble}
               onThrowProjectile={throwProjectile}
               localName={props.localName}
               peerName={
-                tcp.peerName ??
+                firstPeerName ??
                 (props.role === "client" ? props.hostName : undefined) ??
                 "Buddy"
               }
